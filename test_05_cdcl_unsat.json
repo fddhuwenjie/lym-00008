@@ -1,0 +1,1 @@
+{"sat":false,"assignment":null,"decision_steps":1,"time_seconds":0.0,"conflicts":2,"restarts":0,"learnt_clauses":1,"proof":[[-1],[1,-2],[]],"proof_formatted":"1. -1\n2. 1 -2\n3. 0","assignment_valid":null}

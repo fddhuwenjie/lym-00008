@@ -1,0 +1,25 @@
+SAT Solver API Test Results
+============================================================
+
+[FAIL] Root endpoint
+       {'error': 'timed out'}
+[FAIL] DIMACS parse
+       {'error': 'timed out'}
+[FAIL] DPLL SAT solve
+       {'error': 'timed out'}
+[FAIL] CDCL SAT solve
+       {'error': 'timed out'}
+[FAIL] CDCL UNSAT solve
+       {'error': 'timed out'}
+[FAIL] Random formula generation
+       {'error': 'timed out'}
+[FAIL] Pigeonhole formula generation
+       {'error': 'timed out'}
+[FAIL] 100-var 3-SAT generation
+       {'error': 'timed out'}
+[FAIL] Sudoku solve
+       {'error': 'timed out'}
+[FAIL] Benchmark cases
+       {'error': 'timed out'}
+
+Passed: 0/10
