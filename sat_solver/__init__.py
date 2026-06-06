@@ -1,6 +1,20 @@
-from .dimacs import CNF, parse_dimacs, parse_dimacs_file
+from .dimacs import CNF, WCNF, parse_dimacs, parse_dimacs_file, parse_wcnf, parse_wcnf_file
 from .dpll import dpll_solve, DPLLResult
 from .cdcl import cdcl_solve, CDCLResult
+from .maxsat import (
+    oll_maxsat_solve,
+    maxsat_solve_from_wcnf,
+    maxsat_solve_from_clauses,
+    brute_force_maxsat,
+    MaxSATResult,
+)
+from .vertex_cover import (
+    WeightedGraph,
+    encode_weighted_vertex_cover,
+    decode_vertex_cover,
+    is_valid_vertex_cover,
+    brute_force_min_vertex_cover,
+)
 from .formula_generator import (
     generate_random_ksat,
     generate_pigeonhole,
@@ -28,12 +42,25 @@ from .benchmarks import (
 
 __all__ = [
     "CNF",
+    "WCNF",
     "parse_dimacs",
     "parse_dimacs_file",
+    "parse_wcnf",
+    "parse_wcnf_file",
     "dpll_solve",
     "DPLLResult",
     "cdcl_solve",
     "CDCLResult",
+    "oll_maxsat_solve",
+    "maxsat_solve_from_wcnf",
+    "maxsat_solve_from_clauses",
+    "brute_force_maxsat",
+    "MaxSATResult",
+    "WeightedGraph",
+    "encode_weighted_vertex_cover",
+    "decode_vertex_cover",
+    "is_valid_vertex_cover",
+    "brute_force_min_vertex_cover",
     "generate_random_ksat",
     "generate_pigeonhole",
     "generate_chain_formula",
