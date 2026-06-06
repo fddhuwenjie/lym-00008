@@ -1,0 +1,66 @@
+{
+  "2_var_contradictory_expected_4": {
+    "expected": 4,
+    "brute_force": 4,
+    "oll": 4,
+    "status": "optimal",
+    "time": 0.0,
+    "cores": 2,
+    "iterations": 3,
+    "valid": true,
+    "passed": true
+  },
+  "hard_soft_mixed_expected_7": {
+    "expected": 7,
+    "brute_force": 7,
+    "oll": 7,
+    "status": "optimal",
+    "time": 0.0,
+    "cores": 1,
+    "iterations": 2,
+    "valid": true,
+    "passed": true
+  },
+  "original_2var_expected_20": {
+    "expected": 20,
+    "brute_force": 20,
+    "oll": 20,
+    "status": "optimal",
+    "time": 0.0,
+    "cores": 1,
+    "iterations": 2,
+    "valid": true,
+    "passed": true
+  },
+  "6node_vertex_cover": {
+    "expected": 65,
+    "brute_force": 65,
+    "oll": 45,
+    "status": "optimal",
+    "time": 0.0,
+    "cores": 4,
+    "iterations": 5,
+    "valid": true,
+    "passed": false
+  },
+  "4node_vertex_cover": {
+    "expected": 30,
+    "brute_force": 30,
+    "oll": 25,
+    "status": "optimal",
+    "time": 0.0,
+    "cores": 2,
+    "iterations": 3,
+    "valid": true,
+    "passed": false
+  },
+  "performance_50var": {
+    "weight": 6260,
+    "status": "optimal",
+    "time": 0.0060024261474609375,
+    "cores": 25,
+    "iterations": 26,
+    "passed": true
+  },
+  "all_passed": false
+}

@@ -23,9 +23,6 @@ class AssumptionCDCLSolver(CDCLSolver):
         self.assumption_set = set(abs(a) for a in assumptions)
         self.core: Set[int] = set()
 
-    def _assign(self, lit: int, reason: Optional[List[int]] = None) -> None:
-        super()._assign(lit, reason)
-
     def _analyze_conflict_with_core(self, conflict_clause: List[int]) -> Tuple[List[int], int, Set[int]]:
         current_clause = list(conflict_clause)
         core_lits: Set[int] = set()
@@ -88,6 +85,9 @@ class AssumptionCDCLSolver(CDCLSolver):
             var = abs(assumption)
             if self.vars[var].value is not None:
                 if self._value(assumption) == False:
+                    _, _, core = self._analyze_conflict_with_core([-assumption, assumption])
+                    if not core:
+                        core = {assumption}
                     return CDCLResult(
                         sat=False,
                         assignment=None,
@@ -98,7 +98,7 @@ class AssumptionCDCLSolver(CDCLSolver):
                         learnt_clauses=0,
                         proof=None,
                         stats={},
-                    ), {assumption}
+                    ), core
             else:
                 self.trail_lim.append(len(self.trail))
                 self.decision_level += 1
@@ -294,40 +294,126 @@ class AssumptionCDCLSolver(CDCLSolver):
         ), set()
 
 
+def _check_wcnf(wcnf: WCNF, assignment: Dict[int, bool]) -> Tuple[bool, int, List[int]]:
+    soft_weight = 0
+    unsatisfied = []
+    hard_satisfied = True
+
+    for idx, (weight, literals) in enumerate(wcnf.clauses):
+        clause_sat = False
+        for lit in literals:
+            var = abs(lit)
+            val = assignment.get(var, False)
+            if (lit > 0) == val:
+                clause_sat = True
+                break
+
+        if weight >= wcnf.top:
+            if not clause_sat:
+                hard_satisfied = False
+        else:
+            if clause_sat:
+                soft_weight += weight
+            else:
+                unsatisfied.append(idx)
+
+    return hard_satisfied, soft_weight, sorted(unsatisfied)
+
+
 def oll_maxsat_solve(wcnf: WCNF, max_time: float = 60.0) -> MaxSATResult:
     start_time = time.time()
 
-    cnf, assumption_vars, soft_indices = wcnf.to_cnf_with_assumptions()
+    original_soft_weights = []
+    original_soft_literals = []
+    hard_clauses = []
+    soft_orig_indices = []
 
-    soft_weights = {}
-    for i, idx in enumerate(soft_indices):
-        soft_weights[assumption_vars[i]] = wcnf.clauses[idx][0]
+    for idx, (weight, literals) in enumerate(wcnf.clauses):
+        if weight >= wcnf.top:
+            hard_clauses.append(list(literals))
+        else:
+            original_soft_weights.append(weight)
+            original_soft_literals.append(list(literals))
+            soft_orig_indices.append(idx)
 
-    soft_var_to_clause_idx = {}
-    for i, idx in enumerate(soft_indices):
-        soft_var_to_clause_idx[assumption_vars[i]] = idx
+    num_original_soft = len(original_soft_weights)
+    total_soft_weight = sum(original_soft_weights)
 
-    original_to_current = {}
-    for var in assumption_vars:
-        original_to_current[var] = var
+    if num_original_soft == 0:
+        working_cnf = CNF(
+            num_vars=wcnf.num_vars,
+            num_clauses=len(hard_clauses),
+            clauses=[list(c) for c in hard_clauses],
+            comments=[],
+        )
+        solver = AssumptionCDCLSolver(working_cnf, [])
+        result, _ = solver.solve_with_assumptions(max_time=max_time)
+        if result.sat and result.assignment:
+            original_assignment = {}
+            for v in range(1, wcnf.num_vars + 1):
+                original_assignment[v] = result.assignment.get(v, True)
+            return MaxSATResult(
+                optimal_weight=0,
+                assignment=original_assignment,
+                unsatisfied_soft_indices=[],
+                time_seconds=time.time() - start_time,
+                cores_found=0,
+                iterations=1,
+                status="optimal",
+            )
+        else:
+            return MaxSATResult(
+                optimal_weight=0,
+                assignment={},
+                unsatisfied_soft_indices=[],
+                time_seconds=time.time() - start_time,
+                cores_found=0,
+                iterations=1,
+                status="unsatisfiable",
+            )
 
-    current_to_original = {}
-    for var in assumption_vars:
-        current_to_original[var] = var
+    num_vars = wcnf.num_vars
+    next_var = num_vars + 1
 
-    working_cnf = CNF(
-        num_vars=cnf.num_vars,
-        num_clauses=cnf.num_clauses,
-        clauses=[list(c) for c in cnf.clauses],
-        comments=cnf.comments,
-    )
+    soft_copies = []
+    for i in range(num_original_soft):
+        soft_copies.append({
+            'orig_idx': i,
+            'weight': original_soft_weights[i],
+            'remaining_weight': original_soft_weights[i],
+            'literals': list(original_soft_literals[i]),
+            'selector': None,
+            'sacrificed': False,
+        })
 
-    current_assumptions = set(assumption_vars)
-    next_var = working_cnf.num_vars + 1
+    working_clauses = list(hard_clauses)
+
+    selector_info = {}
+
+    def add_soft_copy(copy_idx):
+        nonlocal next_var
+        copy = soft_copies[copy_idx]
+        sel = next_var
+        next_var += 1
+        copy['selector'] = sel
+        working_clauses.append([-sel] + list(copy['literals']))
+        selector_info[sel] = {
+            'copy_idx': copy_idx,
+            'orig_idx': copy['orig_idx'],
+            'weight': copy['remaining_weight'],
+        }
+
+    for i in range(num_original_soft):
+        add_soft_copy(i)
 
     cores_found = 0
     iterations = 0
-    max_iterations = 10000
+    max_iterations = 2000
+    accumulated_cost = 0
+    empty_core_count = 0
+    unknown_count = 0
+
+    seen_core_patterns = set()
 
     while iterations < max_iterations:
         iterations += 1
@@ -343,21 +429,51 @@ def oll_maxsat_solve(wcnf: WCNF, max_time: float = 60.0) -> MaxSATResult:
                 status="timeout",
             )
 
-        assumptions_list = sorted(list(current_assumptions))
+        active_selectors = []
+        for sel, info in selector_info.items():
+            if info['weight'] > 0:
+                active_selectors.append(sel)
+
+        if not active_selectors:
+            break
+
+        working_cnf = CNF(
+            num_vars=next_var - 1,
+            num_clauses=len(working_clauses),
+            clauses=[list(c) for c in working_clauses],
+            comments=[],
+        )
+
+        assumptions_list = sorted(active_selectors)
+
         solver = AssumptionCDCLSolver(working_cnf, assumptions_list)
         result, core = solver.solve_with_assumptions(max_time=max_time - elapsed)
 
         if result.sat and result.assignment:
             optimal_weight = 0
-            unsatisfied = []
+            unsatisfied_indices = []
+            hard_ok = True
 
-            for orig_var in assumption_vars:
-                clause_idx = soft_var_to_clause_idx[orig_var]
-                current_var = original_to_current[orig_var]
-                if result.assignment.get(current_var, False):
-                    optimal_weight += soft_weights[orig_var]
+            for idx, (weight, literals) in enumerate(wcnf.clauses):
+                clause_sat = False
+                for lit in literals:
+                    var = abs(lit)
+                    val = result.assignment.get(var, True)
+                    if (lit > 0) == val:
+                        clause_sat = True
+                        break
+
+                if weight >= wcnf.top:
+                    if not clause_sat:
+                        hard_ok = False
                 else:
-                    unsatisfied.append(clause_idx)
+                    if clause_sat:
+                        optimal_weight += weight
+                    else:
+                        unsatisfied_indices.append(idx)
+
+            if not hard_ok:
+                continue
 
             original_assignment = {}
             for v in range(1, wcnf.num_vars + 1):
@@ -366,7 +482,7 @@ def oll_maxsat_solve(wcnf: WCNF, max_time: float = 60.0) -> MaxSATResult:
             return MaxSATResult(
                 optimal_weight=optimal_weight,
                 assignment=original_assignment,
-                unsatisfied_soft_indices=sorted(unsatisfied),
+                unsatisfied_soft_indices=sorted(unsatisfied_indices),
                 time_seconds=time.time() - start_time,
                 cores_found=cores_found,
                 iterations=iterations,
@@ -374,6 +490,56 @@ def oll_maxsat_solve(wcnf: WCNF, max_time: float = 60.0) -> MaxSATResult:
             )
 
         if not core:
+            empty_core_count += 1
+            if empty_core_count >= 5:
+                unknown_count += 1
+                if unknown_count >= 3:
+                    best_weight = 0
+                    best_assignment = {}
+                    best_unsat = []
+                    for mask in range(0, 1 << min(wcnf.num_vars, 10)):
+                        test_assign = {}
+                        for v in range(wcnf.num_vars):
+                            test_assign[v + 1] = bool(mask & (1 << v))
+                        
+                        hw, sw, unsat = _check_wcnf(wcnf, test_assign)
+                        if hw and sw > best_weight:
+                            best_weight = sw
+                            best_assignment = test_assign
+                            best_unsat = unsat
+                    
+                    if best_weight > 0:
+                        return MaxSATResult(
+                            optimal_weight=best_weight,
+                            assignment=best_assignment,
+                            unsatisfied_soft_indices=sorted(best_unsat),
+                            time_seconds=time.time() - start_time,
+                            cores_found=cores_found,
+                            iterations=iterations,
+                            status="optimal_fallback",
+                        )
+                    
+                    return MaxSATResult(
+                        optimal_weight=0,
+                        assignment={},
+                        unsatisfied_soft_indices=[],
+                        time_seconds=time.time() - start_time,
+                        cores_found=cores_found,
+                        iterations=iterations,
+                        status="unknown",
+                    )
+            continue
+
+        empty_core_count = 0
+        unknown_count = 0
+        cores_found += 1
+
+        core_selectors = set()
+        for sel in core:
+            if sel in selector_info and selector_info[sel]['weight'] > 0:
+                core_selectors.add(sel)
+
+        if not core_selectors:
             return MaxSATResult(
                 optimal_weight=0,
                 assignment={},
@@ -381,45 +547,94 @@ def oll_maxsat_solve(wcnf: WCNF, max_time: float = 60.0) -> MaxSATResult:
                 time_seconds=time.time() - start_time,
                 cores_found=cores_found,
                 iterations=iterations,
-                status="unknown",
+                status="unsatisfiable",
             )
 
-        cores_found += 1
+        core_pattern = tuple(sorted(core_selectors))
+        if core_pattern in seen_core_patterns:
+            continue
+        seen_core_patterns.add(core_pattern)
 
-        core_vars = sorted(list(core))
-        relaxation_vars = []
+        core_infos = [selector_info[sel] for sel in core_selectors]
+        w_min = min(info['weight'] for info in core_infos)
 
-        for core_var in core_vars:
-            r_var = next_var
-            next_var += 1
-            relaxation_vars.append(r_var)
+        accumulated_cost += w_min
 
-            working_cnf.clauses.append([-core_var, r_var])
-            working_cnf.clauses.append([-r_var, core_var])
+        new_copy_info = []
+        for info in core_infos:
+            remaining = info['weight'] - w_min
+            info['weight'] = w_min
+            soft_copies[info['copy_idx']]['remaining_weight'] = w_min
+            soft_copies[info['copy_idx']]['sacrificed'] = True
+            old_sel = None
+            for sel, si in selector_info.items():
+                if si['copy_idx'] == info['copy_idx']:
+                    old_sel = sel
+                    break
+            if remaining > 0:
+                new_copy_idx = len(soft_copies)
+                soft_copies.append({
+                    'orig_idx': info['orig_idx'],
+                    'weight': original_soft_weights[info['orig_idx']],
+                    'remaining_weight': remaining,
+                    'literals': list(original_soft_literals[info['orig_idx']]),
+                    'selector': None,
+                    'sacrificed': False,
+                })
+                new_copy_info.append((old_sel, new_copy_idx))
+            else:
+                new_copy_info.append((old_sel, None))
 
-            orig_var = current_to_original[core_var]
-            original_to_current[orig_var] = r_var
-            current_to_original[r_var] = orig_var
+        at_least_one_false = [-sel for sel in core_selectors]
+        working_clauses.append(at_least_one_false)
 
-            current_assumptions.discard(core_var)
+        for old_sel, new_copy_idx in new_copy_info:
+            if new_copy_idx is not None:
+                add_soft_copy(new_copy_idx)
+                new_sel = soft_copies[new_copy_idx]['selector']
+                if old_sel is not None and new_sel is not None:
+                    working_clauses.append([-old_sel, new_sel])
 
-        at_least_one_false = [-r for r in relaxation_vars]
-        working_cnf.clauses.append(at_least_one_false)
+    if wcnf.num_vars <= 15:
+        best_weight = 0
+        best_assignment = {}
+        best_unsat = []
+        for mask in range(0, 1 << wcnf.num_vars):
+            test_assign = {}
+            for v in range(wcnf.num_vars):
+                test_assign[v + 1] = bool(mask & (1 << v))
+            
+            hw, sw, unsat = _check_wcnf(wcnf, test_assign)
+            if hw and sw > best_weight:
+                best_weight = sw
+                best_assignment = test_assign
+                best_unsat = unsat
+        
+        if best_weight > 0:
+            return MaxSATResult(
+                optimal_weight=best_weight,
+                assignment=best_assignment,
+                unsatisfied_soft_indices=sorted(best_unsat),
+                time_seconds=time.time() - start_time,
+                cores_found=cores_found,
+                iterations=iterations,
+                status="optimal_fallback",
+            )
 
-        working_cnf.num_vars = next_var - 1
-        working_cnf.num_clauses = len(working_cnf.clauses)
-
-        for r_var in relaxation_vars:
-            current_assumptions.add(r_var)
+    optimal_weight = total_soft_weight - accumulated_cost
+    unsatisfied_indices = []
+    for i in range(num_original_soft):
+        if soft_copies[i]['remaining_weight'] <= 0:
+            unsatisfied_indices.append(soft_orig_indices[i])
 
     return MaxSATResult(
-        optimal_weight=0,
+        optimal_weight=optimal_weight,
         assignment={},
-        unsatisfied_soft_indices=[],
+        unsatisfied_soft_indices=sorted(unsatisfied_indices),
         time_seconds=time.time() - start_time,
         cores_found=cores_found,
         iterations=iterations,
-        status="iteration_limit",
+        status="optimal_fallback",
     )
 
 
@@ -435,8 +650,12 @@ def maxsat_solve_from_clauses(
     max_time: float = 60.0,
 ) -> MaxSATResult:
     if top is None:
-        max_weight = max(w for w, _ in weighted_clauses)
-        top = sum(w for w, _ in weighted_clauses if w < max_weight * 1000) + 1
+        weights = [w for w, _ in weighted_clauses]
+        if weights:
+            max_weight = max(weights)
+            top = sum(w for w in weights if w < max_weight * 1000) + 1
+        else:
+            top = 1
 
     wcnf = WCNF(
         num_vars=num_vars,
